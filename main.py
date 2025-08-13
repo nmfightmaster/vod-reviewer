@@ -19,9 +19,9 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QHBoxLayout,
-    QPlainTextEdit,
     QGroupBox,
     QGridLayout,
+    QLayout,
     QSizePolicy,
     QMenu,
     QSpacerItem,
@@ -35,6 +35,13 @@ from clip_worker import ClipExtractionWorker
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        # Where to adjust the hard-coded events. Replace with Riot API or detection later.
+        self.eventsConfig = [
+            {"time": 10, "eventType": "kill"},
+            {"time": 35, "eventType": "death"},
+            {"time": 75, "eventType": "kill"},
+            {"time": 120, "eventType": "death"},
+        ]
         self.vodFilePath: str = ""
         self.workerThread: QThread | None = None
         self.worker: ClipExtractionWorker | None = None
@@ -77,6 +84,9 @@ class MainWindow(QMainWindow):
         videoGroupLayout.setHorizontalSpacing(10)
         videoGroupLayout.setVerticalSpacing(8)
         videoGroup.setLayout(videoGroupLayout)
+        # Prevent this box from stretching vertically beyond its contents
+        videoGroup.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        videoGroupLayout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         # Layout choice: grid aligns label, button, and path display neatly and resizes well
         self.selectVodButton = QPushButton("Select VOD File…")
         self.selectVodButton.setObjectName("primaryButton")
@@ -96,6 +106,9 @@ class MainWindow(QMainWindow):
         matchLayout.setHorizontalSpacing(10)
         matchLayout.setVerticalSpacing(8)
         matchGroup.setLayout(matchLayout)
+        # Keep height proportional to content
+        matchGroup.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        matchLayout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         matchLayout.addWidget(QLabel("Start time (seconds):"), 0, 0)
         self.matchStartOffsetInput = QLineEdit()
         self.matchStartOffsetInput.setPlaceholderText("e.g., 123")
@@ -104,27 +117,16 @@ class MainWindow(QMainWindow):
         matchLayout.addWidget(self.matchStartOffsetInput, 0, 1)
         rightLayout.addWidget(matchGroup)
 
-        # Group 3: Fake event timestamps input
-        eventsGroup = QGroupBox("Fake Event Timestamps")
-        eventsLayout = QVBoxLayout()
-        eventsLayout.setSpacing(6)
-        eventsGroup.setLayout(eventsLayout)
-        eventsHelp = QLabel(
-            "Enter seconds relative to match start (comma or newline separated)."
-        )
-        self.fakeTimestampsInput = QPlainTextEdit()
-        # Where fake timestamps are defined (adjust defaults here)
-        self.fakeTimestampsInput.setPlainText("10, 35, 75, 120")
-        self.fakeTimestampsInput.setMinimumHeight(72)
-        eventsLayout.addWidget(eventsHelp)
-        eventsLayout.addWidget(self.fakeTimestampsInput)
-        rightLayout.addWidget(eventsGroup)
+        # Group 3 removed: Fake event timestamps input is no longer in the GUI.
+        # Events are now hard-coded in self.eventsConfig above.
 
         # Group 4: Clip generation controls
         controlsGroup = QGroupBox("Clip Generation")
         controlsLayout = QHBoxLayout()
         controlsLayout.setSpacing(10)
         controlsGroup.setLayout(controlsLayout)
+        # Keep height proportional to content
+        controlsGroup.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.generateClipsButton = QPushButton("Generate Clips")
         self.generateClipsButton.clicked.connect(self.generateClips)
         self.statusLabel = QLabel("")
@@ -154,6 +156,8 @@ class MainWindow(QMainWindow):
         self.clipsListWidget.currentRowChanged.connect(self.onListRowChanged)
         clipsLayout.addWidget(self.clipsListWidget)
         rightLayout.addWidget(clipsGroup)
+        # Consume remaining vertical space with a stretch so groups don't expand
+        rightLayout.addStretch(1)
 
         # Group 6: In-app clip viewer (plays one clip at a time)
         viewerGroup = QGroupBox("Clip Viewer")
@@ -241,21 +245,7 @@ class MainWindow(QMainWindow):
             self.vodFilePath = filePath
             self.vodPathDisplay.setText(filePath)
 
-    def parseFakeTimestamps(self) -> List[int]:
-        rawText = self.fakeTimestampsInput.toPlainText().strip()
-        if not rawText:
-            return []
-
-        separatorsReplaced = rawText.replace("\n", ",").replace(";", ",")
-        parts = [p.strip() for p in separatorsReplaced.split(",") if p.strip()]
-        timestamps: List[int] = []
-        for part in parts:
-            try:
-                timestamps.append(int(float(part)))
-            except ValueError:
-                # Ignore invalid entries
-                pass
-        return timestamps
+    # Fake timestamps parser removed; events are configured in self.eventsConfig
 
     def generateClips(self) -> None:
         if not self.vodFilePath or not os.path.isfile(self.vodFilePath):
@@ -269,11 +259,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid Offset", "Enter a numeric offset in seconds.")
             return
 
-        fakeEventTimestamps = self.parseFakeTimestamps()
-        if not fakeEventTimestamps:
-            # Default fake timestamps if the input area is empty or invalid
-            # Where fake timestamps are defined (adjust defaults here)
-            fakeEventTimestamps = [10, 35, 75, 120]
+        # Build events list for the worker from the hard-coded config.
+        # How video-relative timestamps are computed: the worker will add matchStartOffsetSeconds
+        # to each event's 'time' to create absolute timestamps for FFmpeg cuts.
+        events = list(self.eventsConfig)
 
         outputDir = os.path.join(self.projectRoot(), "clips")
         os.makedirs(outputDir, exist_ok=True)
@@ -292,7 +281,7 @@ class MainWindow(QMainWindow):
         self.worker = ClipExtractionWorker(
             vodPath=self.vodFilePath,
             matchStartOffsetSeconds=matchStartOffsetSeconds,
-            fakeEventTimestamps=fakeEventTimestamps,
+            events=events,
             outputDir=outputDir,
             preSeconds=preSeconds,
             postSeconds=postSeconds,
@@ -314,7 +303,7 @@ class MainWindow(QMainWindow):
         self.generateClipsButton.setEnabled(not isBusy)
         self.selectVodButton.setEnabled(not isBusy)
         self.matchStartOffsetInput.setEnabled(not isBusy)
-        self.fakeTimestampsInput.setEnabled(not isBusy)
+        # No longer applicable: fake timestamps input removed
 
     def onClipGenerated(self, clipFilename: str, clipStartSeconds: float) -> None:
         # Interactive list item: store metadata for viewer and actions

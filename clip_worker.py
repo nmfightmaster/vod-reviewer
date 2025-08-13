@@ -1,7 +1,7 @@
 import os
 import subprocess
 from dataclasses import dataclass
-from typing import List
+from typing import List, Dict
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -24,7 +24,7 @@ class ClipExtractionWorker(QObject):
         self,
         vodPath: str,
         matchStartOffsetSeconds: int,
-        fakeEventTimestamps: List[int],
+        events: List[Dict[str, object]],
         outputDir: str,
         preSeconds: int = 5,
         postSeconds: int = 5,
@@ -32,7 +32,9 @@ class ClipExtractionWorker(QObject):
         super().__init__()
         self.vodPath = vodPath
         self.matchStartOffsetSeconds = matchStartOffsetSeconds
-        self.fakeEventTimestamps = fakeEventTimestamps
+        # Where to adjust events used for clip generation. Each event requires
+        # keys: 'time' (seconds relative to match start) and 'eventType' (string).
+        self.events = events
         self.outputDir = outputDir
         self.preSeconds = preSeconds
         self.postSeconds = postSeconds
@@ -40,13 +42,19 @@ class ClipExtractionWorker(QObject):
     def buildTasks(self) -> List[ClipTask]:
         tasks: List[ClipTask] = []
         # How video-relative timestamps are computed:
-        # Add the match start offset to each event timestamp to get absolute times
-        for idx, relativeEventSecond in enumerate(self.fakeEventTimestamps, start=1):
+        # Add the match start offset to each event 'time' to obtain absolute times in the video.
+        for event in self.events:
+            relativeEventSecond = float(event.get("time", 0))
+            eventType = str(event.get("eventType", "event")).strip().lower() or "event"
             absoluteSecond = float(self.matchStartOffsetSeconds + relativeEventSecond)
             # Where to adjust clip duration window
             startTime = max(absoluteSecond - self.preSeconds, 0.0)
             duration = float(self.preSeconds + self.postSeconds)
-            outputFilename = f"clip_{idx:02d}_{int(absoluteSecond)}s.mp4"
+            # How filenames are generated from timestamps and event types:
+            # <eventType>-<minutes>m<seconds>s.mp4, e.g., kill-1m50s.mp4
+            minutes = int(absoluteSecond // 60)
+            seconds = int(absoluteSecond % 60)
+            outputFilename = f"{eventType}-{minutes}m{seconds}s.mp4"
             outputPath = os.path.join(self.outputDir, outputFilename)
             tasks.append(ClipTask(startTimeSeconds=startTime, durationSeconds=duration, outputPath=outputPath))
         return tasks
